@@ -1,0 +1,14 @@
+[
+  { "url": "https://www.playphrase.me/#/search?q=I+need+a+break.&pos=1&language=en", "title": "I need a break" },
+  { "url": "https://www.playphrase.me/#/search?q=It+was+my+mistake&pos=1&language=en", "title": "It was my mistake" },
+  { "url": "https://www.playphrase.me/#/search?q=It%E2%80%99s+not+my+fault&pos=2&language=en", "title": "It's not my fault" },
+  { "url": "https://www.playphrase.me/#/search?q=It+doesn't+matter+to+me&pos=1&language=en", "title": "It doesn't matter to me" },
+  { "url": "https://www.playphrase.me/#/search?q=I+don%E2%80%99t+care+who+you+are&pos=1&language=en", "title": "I don't care who you are" },
+  { "url": "https://www.playphrase.me/#/search?q=Really+Rough+day&pos=1&language=en", "title": "Really rough day" },
+  { "url": "https://www.playphrase.me/#/search?q=+really+strict&pos=13&language=en", "title": "Really strict" },
+  { "url": "https://www.playphrase.me/#/search?q=+That+was+a+bit+harsh&pos=2&language=en", "title": "That was a bit harsh" },
+  { "url": "https://www.playphrase.me/#/search?q=That's+right&pos=2&language=en", "title": "That's right" },
+  { "url": "https://www.playphrase.me/#/search?q=Yes+Exactly&pos=2&language=en", "title": "Yes exactly" },
+  { "url": "https://www.playphrase.me/#/search?q=You+tried+your+best.&pos=1&language=en", "title": "You tried your best" },
+  { "url": "https://www.playphrase.me/#/search?q=You+did+all+you+could&pos=1&language=en", "title": "You did all you could" }
+]
