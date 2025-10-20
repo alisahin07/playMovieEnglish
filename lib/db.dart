@@ -1,4 +1,3 @@
-// lib/db.dart
 import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart' as p;
@@ -22,15 +21,15 @@ class AppDatabase {
     final String path = p.join(dir.path, 'leitner_player.db');
     return openDatabase(
       path,
-      version: 2, // v2: usage_logs tablosu eklendi, UTC standardına geçiş
+      version: 3, // v3: favoriler sütunu eklendi
       onCreate: (db, version) async {
         await _createV1(db);
         await _migrateToV2(db);
+        await _migrateToV3(db);
       },
       onUpgrade: (db, oldV, newV) async {
-        if (oldV < 2) {
-          await _migrateToV2(db);
-        }
+        if (oldV < 2) await _migrateToV2(db);
+        if (oldV < 3) await _migrateToV3(db);
       },
     );
   }
@@ -57,12 +56,11 @@ class AppDatabase {
     await db.insert('settings', {
       'key': 'app',
       'value':
-          '{"dwellSeconds":120,"boxIntervalsMinutes":[1440,2880,5760,11520,23040]}'
+      '{"dwellSeconds":120,"boxIntervalsMinutes":[1440,2880,5760,11520,23040]}'
     });
   }
 
   Future<void> _migrateToV2(Database db) async {
-    // Kullanım logları: UTC ISO string ve toplam saniye
     await db.execute('''
       CREATE TABLE IF NOT EXISTS usage_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,5 +69,9 @@ class AppDatabase {
         durationSeconds INTEGER NOT NULL
       );
     ''');
+  }
+
+  Future<void> _migrateToV3(Database db) async {
+    await db.execute('ALTER TABLE cards ADD COLUMN isFavorite INTEGER NOT NULL DEFAULT 0;');
   }
 }

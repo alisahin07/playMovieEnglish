@@ -1,6 +1,5 @@
 // lib/fg_service.dart
 import 'dart:async';
-
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
@@ -10,34 +9,36 @@ import 'repository.dart';
 /// ---- Servis bildirimi (sessiz) için kanal sabitleri ----
 const String kFgChannelId = 'leitner_timer';
 const String kFgChannelName = 'Leitner Sayaç';
-const String kFgChannelDesc = 'Arka plan sayaç servisi (bildirimsiz, sesli uyarı)';
+const String kFgChannelDesc =
+    'Arka planda çalışan sessiz sayaç servisi (Leitner döngüsü)';
 
 /// Foreground servis + periyodik tetik kurulumu
 Future<void> startForegroundLeitnerLoop() async {
-  // Pil optimizasyonunu devre dışı bırakma isteği
+  // Pil optimizasyonu kapatma isteği
   if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
     await FlutterForegroundTask.requestIgnoreBatteryOptimization();
   }
 
-  // v9 API: servis + 1 sn'de bir repeat event
+  // Servis yapılandırması
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: kFgChannelId,
       channelName: kFgChannelName,
       channelDescription: kFgChannelDesc,
-      onlyAlertOnce: true, // kalıcı servis bildirimi sessiz
+      onlyAlertOnce: true,
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
       playSound: false,
     ),
     foregroundTaskOptions: ForegroundTaskOptions(
-      eventAction: ForegroundTaskEventAction.repeat(1000), // her 1 sn tetik
+      eventAction: ForegroundTaskEventAction.repeat(1000),
       autoRunOnBoot: false,
       autoRunOnMyPackageReplaced: false,
       allowWakeLock: true,
       allowWifiLock: true,
     ),
+
   );
 
   if (await FlutterForegroundTask.isRunningService) {
@@ -55,14 +56,15 @@ Future<void> startForegroundLeitnerLoop() async {
   }
 }
 
-Future<void> stopForegroundLeitnerLoop() => FlutterForegroundTask.stopService();
+Future<void> stopForegroundLeitnerLoop() =>
+    FlutterForegroundTask.stopService();
 
 @pragma('vm:entry-point')
 void _startCallback() {
   FlutterForegroundTask.setTaskHandler(_LeitnerTaskHandler());
 }
 
-/// TaskHandler (v9.1.0 imzaları)
+/// TaskHandler — sayaç ve otomatik geçiş mekanizması
 class _LeitnerTaskHandler extends TaskHandler {
   Repository? _repo;
   AppSettings? _settings;
@@ -74,19 +76,26 @@ class _LeitnerTaskHandler extends TaskHandler {
     _repo = await Repository.create();
     _settings = await _repo!.getSettings();
 
-    final now = DateTime.now().toUtc();
-    final due = await _repo!.getDueCards(nowUtc: now);
-    _current = due.isNotEmpty ? due.first : await _repo!.getRandomCard();
+    // İlk kartı bul
+    final due = await _repo!.getDueCards();
+    if (due.isNotEmpty) {
+      _current = due.first;
+    } else {
+      _current = await _repo!.getRandomCard();
+    }
 
-    if (_current != null) {
-      _targetUtc = now.add(Duration(seconds: _settings!.dwellSeconds));
+    if (_current != null && _settings != null) {
+      _targetUtc = DateTime.now()
+          .toUtc()
+          .add(Duration(seconds: _settings!.dwellSeconds));
     }
   }
 
-  // Her 1 sn tetik
+  // Her 1 saniyede bir tetiklenir
   @override
   void onRepeatEvent(DateTime timestamp) {
     if (_current == null || _targetUtc == null || _settings == null) return;
+
     final now = DateTime.now().toUtc();
     if (!now.isBefore(_targetUtc!)) {
       _onCycleElapsed(now);
@@ -94,28 +103,28 @@ class _LeitnerTaskHandler extends TaskHandler {
   }
 
   Future<void> _onCycleElapsed(DateTime nowUtc) async {
-    // ---- Sistem sesi çal (varsayılan notification sesi) ----
+    // Sesli bildirim
     try {
-      FlutterRingtonePlayer().playNotification(
-        volume: 1.0,
-        looping: false,
-        asAlarm: false,
-      );
+      FlutterRingtonePlayer().playNotification();
     } catch (_) {}
 
-    // ---- Leitner ilerletme ----
-    final due = await _repo!.getDueCards(nowUtc: nowUtc);
+    if (_repo == null || _settings == null) return;
+
+    final due = await _repo!.getDueCards();
     if (due.isNotEmpty) {
-      final updated = await _repo!
-          .markCorrect(due.first, _settings!.boxIntervalsMinutes);
+      // sıradaki due kartı işaretle
+      final updated =
+      await _repo!.markCorrect(due.first, _settings!.boxIntervalsMinutes);
       _current = updated;
     } else {
+      // due yoksa rastgele başka kart seç
       _current = await _repo!.getRandomCardExcept(_current!.id) ??
           await _repo!.getRandomCard();
     }
 
-    // yeni tur hedefi
-    _targetUtc = nowUtc.add(Duration(seconds: _settings!.dwellSeconds));
+    // yeni hedef zamanı belirle
+    _targetUtc =
+        nowUtc.add(Duration(seconds: _settings!.dwellSeconds));
   }
 
   @override

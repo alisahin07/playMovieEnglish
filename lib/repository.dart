@@ -1,216 +1,222 @@
 // lib/repository.dart
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
+
 import 'db.dart';
 import 'models.dart';
 
 class Repository {
-  final Database db;
-  Repository(this.db);
+  final Database _db;
+  Repository._(this._db);
 
-  static Future<Repository> create() async =>
-      Repository(await AppDatabase.instance.database);
+  static Future<Repository> create() async {
+    final db = await AppDatabase.instance.database;
+    final repo = Repository._(db);
+    await repo._ensureFavoriteColumn(); // yoksa ekle
+    return repo;
+  }
 
-  // Ayarları oku/yaz
+  // ---------------- SETTINGS ----------------
   Future<AppSettings> getSettings() async {
-    final rows = await db.query('settings',
-        where: 'key = ?', whereArgs: ['app'], limit: 1);
+    final rows =
+    await _db.query('settings', where: 'key = ?', whereArgs: ['app']);
     if (rows.isEmpty) {
-      return AppSettings(
-        dwellSeconds: 120,
-        boxIntervalsMinutes: const [1440, 2880, 5760, 11520, 23040],
-      );
+      final def = AppSettings.defaults();
+      await saveSettings(def);
+      return def;
     }
-    final value = rows.first['value'] as String;
-    return AppSettings.fromMap(jsonDecode(value));
+    final json = jsonDecode(rows.first['value'] as String) as Map<String, dynamic>;
+    return AppSettings.fromJson(json);
   }
 
   Future<void> saveSettings(AppSettings s) async {
-    await db.insert(
+    await _db.insert(
       'settings',
-      {'key': 'app', 'value': jsonEncode(s.toMap())},
+      {'key': 'app', 'value': jsonEncode(s.toJson())},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
-  // Kart CRUD
-  Future<void> upsertCards(List<CardItem> items) async {
-    final batch = db.batch();
-    for (final c in items) {
-      batch.insert('cards', c.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.replace);
-    }
-    await batch.commit(noResult: true);
+  // ---------------- CARDS ----------------
+  Future<List<CardItem>> getAllCards() async {
+    final maps = await _db.query('cards');
+    return maps.map(CardItem.fromMap).toList();
   }
 
   Future<List<CardItem>> getDueCards({DateTime? nowUtc}) async {
     nowUtc ??= DateTime.now().toUtc();
-    final rows = await db.query(
+    final maps = await _db.query(
       'cards',
       where: 'dueAt <= ?',
       whereArgs: [nowUtc.toIso8601String()],
-      orderBy: 'dueAt ASC',
     );
-    return rows.map((e) => CardItem.fromMap(e)).toList();
+    return maps.map(CardItem.fromMap).toList();
   }
 
-  Future<List<CardItem>> getAllCards() async {
-    final rows = await db.query('cards', orderBy: 'dueAt ASC');
-    return rows.map((e) => CardItem.fromMap(e)).toList();
+  Future<CardItem?> getRandomCard() async {
+    final maps = await _db
+        .rawQuery('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
+    if (maps.isEmpty) return null;
+    return CardItem.fromMap(maps.first);
   }
 
-  Future<void> updateCard(CardItem c) async {
-    await db.update('cards', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
+  Future<CardItem?> getRandomCardExcept(String excludeId) async {
+    final maps = await _db.rawQuery(
+      'SELECT * FROM cards WHERE id != ? ORDER BY RANDOM() LIMIT 1',
+      [excludeId],
+    );
+    if (maps.isEmpty) return null;
+    return CardItem.fromMap(maps.first);
   }
 
-  Future<void> deleteCard(String id) async {
-    await db.delete('cards', where: 'id = ?', whereArgs: [id]);
-  }
+  Future<int> importLinksJson(String jsonStr) async {
+    final List<dynamic> data = jsonDecode(jsonStr);
+    int count = 0;
+    final batch = _db.batch();
 
-  Future<void> deleteAll() async {
-    await db.delete('cards');
-  }
+    for (final item in data) {
+      if (item is! Map) continue;
+      final id = (item['id'] ?? item['url'])?.toString();
+      final url = item['url']?.toString();
+      if (id == null || url == null) continue;
 
-  // JSON içe aktar: ["url", ...] veya [{url,title,box?,dueAt?}, ...]
-  Future<int> importLinksJson(String jsonSource,
-      {int initialBox = 0, DateTime? startDueUtc}) async {
-    final data = jsonDecode(jsonSource);
-    if (data is! List) throw Exception('JSON format should be an array.');
-    startDueUtc ??= DateTime.now().toUtc();
+      final title = item['title']?.toString();
+      final now = DateTime.now().toUtc().toIso8601String();
 
-    final items = <CardItem>[];
-    for (final e in data) {
-      if (e is String) {
-        items.add(_makeCard(url: e, title: null, dueUtc: startDueUtc!, box: initialBox));
-      } else if (e is Map<String, dynamic>) {
-        final url = e['url'] as String? ??
-            e['link'] as String? ??
-            e['href'] as String?;
-        if (url == null) continue;
-        final title = e['title'] as String?;
-        final dueStr = e['dueAt'] as String?;
-        final box = e['box'] as int? ?? initialBox;
-        final dueUtc = dueStr != null
-            ? DateTime.parse(dueStr).toUtc()
-            : startDueUtc!;
-        items.add(_makeCard(url: url, title: title, dueUtc: dueUtc, box: box));
-      }
+      batch.insert(
+        'cards',
+        {
+          'id': id,
+          'url': url,
+          'title': title,
+          'box': 1,
+          'dueAt': now,
+          'lastSeenAt': null,
+          'correctCount': 0,
+          'wrongCount': 0,
+          'isFavorite': 0,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      count++;
     }
-    await upsertCards(items);
-    return items.length;
+
+    await batch.commit(noResult: true);
+    return count;
   }
 
-  CardItem _makeCard({
-    required String url,
-    String? title,
-    required DateTime dueUtc,
-    int box = 0,
-  }) {
-    final id = DateTime.now().microsecondsSinceEpoch.toString();
-    return CardItem(
-      id: id,
-      url: url,
-      title: title,
-      box: box,
-      dueAt: dueUtc,
-      lastSeenAt: null,
-    );
-  }
-
-  // İlerlemeyi dışa aktar
   Future<String> exportAllJson() async {
-    final items = await getAllCards();
-    final list = items.map((e) => e.toMap()).toList();
-    return jsonEncode({'version': 1, 'cards': list});
+    final maps = await _db.query('cards');
+    return jsonEncode(maps);
   }
 
-  // LEITNER: doğru → bir üst kutu (UTC)
+  // ---------------- LEITNER ----------------
   Future<CardItem> markCorrect(
       CardItem c, List<int> boxIntervalsMinutes) async {
-    final nextBox = (c.box + 1).clamp(0, boxIntervalsMinutes.length - 1);
-    final delay = Duration(minutes: boxIntervalsMinutes[nextBox]);
-    final nowUtc = DateTime.now().toUtc();
+    final nextBox = (c.box + 1).clamp(1, boxIntervalsMinutes.length);
+    final due = DateTime.now()
+        .toUtc()
+        .add(Duration(minutes: boxIntervalsMinutes[nextBox - 1]));
+
     final updated = c.copyWith(
       box: nextBox,
-      lastSeenAt: nowUtc,
-      dueAt: nowUtc.add(delay),
+      dueAt: due,
+      lastSeenAt: DateTime.now().toUtc(),
       correctCount: c.correctCount + 1,
     );
-    await updateCard(updated);
-    return updated;
-  }
 
-  // Elle kutuya düşür (UTC)
-  Future<CardItem> forceMoveToBox(
-      CardItem c, int targetBox, List<int> boxIntervalsMinutes) async {
-    final idx = targetBox.clamp(0, boxIntervalsMinutes.length - 1);
-    final delay = Duration(minutes: boxIntervalsMinutes[idx]);
-    final nowUtc = DateTime.now().toUtc();
-    final updated = c.copyWith(
-      box: idx,
-      lastSeenAt: nowUtc,
-      dueAt: nowUtc.add(delay),
+    await _db.update(
+      'cards',
+      updated.toMap(),
+      where: 'id = ?',
+      whereArgs: [c.id],
     );
-    await updateCard(updated);
     return updated;
   }
 
-  // ——— Kullanım istatistikleri ———
+  Future<CardItem> moveToBox1(CardItem c, List<int> boxIntervalsMinutes) async {
+    final due = DateTime.now()
+        .toUtc()
+        .add(Duration(minutes: boxIntervalsMinutes[0]));
+    final updated = c.copyWith(
+      box: 1,
+      dueAt: due,
+      lastSeenAt: DateTime.now().toUtc(),
+      wrongCount: c.wrongCount + 1,
+    );
+    await _db.update(
+      'cards',
+      updated.toMap(),
+      where: 'id = ?',
+      whereArgs: [c.id],
+    );
+    return updated;
+  }
 
-  /// Bir seans kullanım logu ekle (UTC)
+  // ---------------- USAGE LOGS ----------------
   Future<void> addUsageLogUtc({
     required DateTime startUtc,
     required DateTime endUtc,
   }) async {
-    final duration = endUtc.difference(startUtc).inSeconds;
-    if (duration <= 0) return;
-    await db.insert('usage_logs', {
+    final durSec = endUtc.difference(startUtc).inSeconds;
+    await _db.insert('usage_logs', {
       'startAt': startUtc.toIso8601String(),
       'endAt': endUtc.toIso8601String(),
-      'durationSeconds': duration,
+      'durationSeconds': durSec,
     });
   }
 
-  /// Tüm zaman toplam süre (Duration)
-  Future<Duration> getTotalUsage() async {
-    final rows = await db.rawQuery(
-        'SELECT SUM(durationSeconds) AS total FROM usage_logs');
-    final secs = (rows.first['total'] as int?) ?? 0;
-    return Duration(seconds: secs);
-  }
-
-  /// Bugün (cihazın yerel gününe göre) toplam süre
   Future<Duration> getTodayUsageLocal() async {
-    final nowLocal = DateTime.now();
-    final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
-    final endLocal = startLocal.add(const Duration(days: 1));
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day);
+    final end = start.add(const Duration(days: 1));
 
-    final startUtc = startLocal.toUtc();
-    final endUtc = endLocal.toUtc();
-
-    // Basit yaklaşım: başlangıcı bugün aralığında olan kayıtları topla
-    final rows = await db.rawQuery(
-      'SELECT SUM(durationSeconds) AS total FROM usage_logs '
-      'WHERE startAt >= ? AND startAt < ?',
-      [startUtc.toIso8601String(), endUtc.toIso8601String()],
+    final rows = await _db.query(
+      'usage_logs',
+      where: 'startAt >= ? AND startAt < ?',
+      whereArgs: [start.toIso8601String(), end.toIso8601String()],
     );
-    final secs = (rows.first['total'] as int?) ?? 0;
-    return Duration(seconds: secs);
+    final totalSec = rows.fold<int>(
+        0, (sum, r) => sum + ((r['durationSeconds'] as int?) ?? 0));
+    return Duration(seconds: totalSec);
   }
 
-  // ——— Rastgele kartlar ———
-  Future<CardItem?> getRandomCard() async {
-    final rows = await db.rawQuery('SELECT * FROM cards ORDER BY RANDOM() LIMIT 1');
-    if (rows.isEmpty) return null;
-    return CardItem.fromMap(rows.first);
+  Future<Duration> getTotalUsage() async {
+    final rows =
+    await _db.rawQuery('SELECT SUM(durationSeconds) AS s FROM usage_logs');
+    final s = rows.first['s'] as int?;
+    return Duration(seconds: s ?? 0);
   }
 
-  Future<CardItem?> getRandomCardExcept(String excludeId) async {
-    final rows = await db.rawQuery(
-      'SELECT * FROM cards WHERE id <> ? ORDER BY RANDOM() LIMIT 1',
-      [excludeId],
+  // ---------------- FAVORITES ----------------
+  Future<void> toggleFavorite(String id, bool isFav) async {
+    await _db.update(
+      'cards',
+      {'isFavorite': isFav ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
     );
-    if (rows.isEmpty) return null;
-    return CardItem.fromMap(rows.first);
+  }
+
+  Future<bool> isFavorite(String id) async {
+    final res = await _db.query('cards',
+        columns: ['isFavorite'], where: 'id = ?', whereArgs: [id]);
+    if (res.isEmpty) return false;
+    return (res.first['isFavorite'] ?? 0) == 1;
+  }
+
+  Future<List<CardItem>> getFavoriteCards() async {
+    final maps = await _db.query('cards', where: 'isFavorite = 1');
+    return maps.map(CardItem.fromMap).toList();
+  }
+
+  // ---------------- MIGRATION HELPERS ----------------
+  Future<void> _ensureFavoriteColumn() async {
+    final info = await _db.rawQuery('PRAGMA table_info(cards)');
+    final exists = info.any((c) => c['name'] == 'isFavorite');
+    if (!exists) {
+      await _db
+          .execute('ALTER TABLE cards ADD COLUMN isFavorite INTEGER DEFAULT 0;');
+    }
   }
 }
