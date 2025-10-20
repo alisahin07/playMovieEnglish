@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
@@ -126,14 +125,6 @@ class _HomePageState extends State<HomePage> {
     await _load();
   }
 
-  void _startRandomPractice() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const RandomPracticePage()),
-    );
-    await _load();
-  }
-
   void _startRandomAll() async {
     await Navigator.push(
       context,
@@ -173,10 +164,6 @@ class _HomePageState extends State<HomePage> {
                       onPressed: _startSession,
                       icon: const Icon(Icons.play_arrow),
                       label: const Text('Seansa Başla')),
-                  OutlinedButton.icon(
-                      onPressed: _startRandomPractice,
-                      icon: const Icon(Icons.shuffle),
-                      label: const Text('Rastgele Çalış')),
                   OutlinedButton.icon(
                       onPressed: _startRandomAll,
                       icon: const Icon(Icons.play_circle),
@@ -274,18 +261,38 @@ class _SessionPageState extends State<SessionPage> {
   int _index = 0;
   int _secondsLeft = 0;
   Timer? _timer;
+  Duration _today = Duration.zero;
+  Duration _total = Duration.zero;
+  late DateTime _startTime;
 
   @override
   void initState() {
     super.initState();
     _queue = widget.initialQueue;
     _secondsLeft = widget.settings.dwellSeconds;
+    _startTime = DateTime.now();
     _initRepo();
     _openExternally(_current.url);
     _startTimer();
+    _updateUsage();
   }
 
-  Future<void> _initRepo() async => _repo = await Repository.create();
+  Future<void> _initRepo() async {
+    _repo = await Repository.create();
+    await _updateUsage();
+  }
+
+  Future<void> _updateUsage() async {
+    final today = await _repo.getTodayUsageLocal();
+    final total = await _repo.getTotalUsage();
+    if (mounted) {
+      setState(() {
+        _today = today;
+        _total = total;
+      });
+    }
+  }
+
   CardItem get _current => _queue[_index];
 
   void _startTimer() {
@@ -297,22 +304,27 @@ class _SessionPageState extends State<SessionPage> {
       if (_secondsLeft <= 0) {
         FlutterRingtonePlayer().playNotification();
         t.cancel();
-        final updated =
-        await _repo.markCorrect(_current, widget.settings.boxIntervalsMinutes);
-        _queue[_index] = updated;
-        await _advance();
+        await _nextCard();
       }
     });
   }
 
-  Future<void> _advance() async {
+  Future<void> _nextCard() async {
+    final updated =
+    await _repo.markCorrect(_current, widget.settings.boxIntervalsMinutes);
+    _queue[_index] = updated;
+
     if (_index < _queue.length - 1) {
       setState(() => _index++);
       _openExternally(_current.url);
       _startTimer();
     } else {
+      final end = DateTime.now();
+      await _repo.addUsageLogUtc(
+          startUtc: _startTime.toUtc(), endUtc: end.toUtc());
       Navigator.pop(context);
     }
+    await _updateUsage();
   }
 
   Future<void> _openExternally(String url) async {
@@ -321,9 +333,14 @@ class _SessionPageState extends State<SessionPage> {
 
   @override
   void dispose() {
+    final end = DateTime.now();
+    _repo.addUsageLogUtc(startUtc: _startTime.toUtc(), endUtc: end.toUtc());
     _timer?.cancel();
     super.dispose();
   }
+
+  String _fmtDur(Duration d) =>
+      '${d.inHours}:${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
@@ -332,83 +349,32 @@ class _SessionPageState extends State<SessionPage> {
     final ss = f.format((_secondsLeft % 60).clamp(0, 59));
     return Scaffold(
       appBar: AppBar(title: Text('Seans ${_index + 1}/${_queue.length}')),
-      body: Center(child: Text('Kalan: $mm:$ss')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('Kalan: $mm:$ss', style: const TextStyle(fontSize: 22)),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Chip(label: Text('Bugün: ${_fmtDur(_today)}')),
+                const SizedBox(width: 8),
+                Chip(label: Text('Toplam: ${_fmtDur(_total)}')),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _nextCard,
+              icon: const Icon(Icons.skip_next),
+              label: const Text('Next'),
+            ),
+          ],
+        ),
+      ),
     );
   }
-}
-
-// ---------------- RANDOM PRACTICE ----------------
-class RandomPracticePage extends StatefulWidget {
-  const RandomPracticePage({super.key});
-  @override
-  State<RandomPracticePage> createState() => _RandomPracticePageState();
-}
-
-class _RandomPracticePageState extends State<RandomPracticePage> {
-  late Repository _repo;
-  AppSettings? _settings;
-  CardItem? _current;
-  int _secondsLeft = 0;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    _repo = await Repository.create();
-    final s = await _repo.getSettings();
-    final first = await _repo.getRandomCard();
-    if (first == null) {
-      Navigator.pop(context);
-      return;
-    }
-    setState(() {
-      _settings = s;
-      _current = first;
-      _secondsLeft = s.dwellSeconds;
-    });
-    _openExternally(first.url);
-    _startTimer();
-  }
-
-  void _startTimer() {
-    _timer?.cancel();
-    _secondsLeft = _settings!.dwellSeconds;
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) async {
-      if (!mounted) return;
-      setState(() => _secondsLeft--);
-      if (_secondsLeft <= 0) {
-        FlutterRingtonePlayer().playNotification();
-        t.cancel();
-        final next = await _repo.getRandomCardExcept(_current!.id) ??
-            await _repo.getRandomCard();
-        if (next == null) {
-          Navigator.pop(context);
-          return;
-        }
-        setState(() => _current = next);
-        _openExternally(next.url);
-        _startTimer();
-      }
-    });
-  }
-
-  Future<void> _openExternally(String url) async {
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      Scaffold(appBar: AppBar(title: const Text('Rastgele Çalış')), body: Center(child: Text('Kalan: $_secondsLeft sn')));
 }
 
 // ---------------- RANDOM ALL PAGE ----------------
@@ -425,16 +391,21 @@ class _RandomAllPageState extends State<RandomAllPage> {
   int _secondsLeft = 0;
   Timer? _timer;
   late AppSettings _settings;
+  Duration _today = Duration.zero;
+  Duration _total = Duration.zero;
+  late DateTime _startTime;
 
   @override
   void initState() {
     super.initState();
+    _startTime = DateTime.now();
     _init();
   }
 
   Future<void> _init() async {
     _repo = await Repository.create();
     _settings = await _repo.getSettings();
+    await _updateUsage();
     final all = await _repo.getAllCards();
     if (all.isEmpty) {
       ScaffoldMessenger.of(context)
@@ -442,6 +413,7 @@ class _RandomAllPageState extends State<RandomAllPage> {
       Navigator.pop(context);
       return;
     }
+
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/random_all_index.txt');
     if (await file.exists()) {
@@ -453,6 +425,17 @@ class _RandomAllPageState extends State<RandomAllPage> {
     _startTimer();
   }
 
+  Future<void> _updateUsage() async {
+    final today = await _repo.getTodayUsageLocal();
+    final total = await _repo.getTotalUsage();
+    if (mounted) {
+      setState(() {
+        _today = today;
+        _total = total;
+      });
+    }
+  }
+
   void _startTimer() {
     _timer?.cancel();
     _secondsLeft = _settings.dwellSeconds;
@@ -462,21 +445,30 @@ class _RandomAllPageState extends State<RandomAllPage> {
       if (_secondsLeft <= 0) {
         FlutterRingtonePlayer().playNotification();
         t.cancel();
-        final dir = await getApplicationDocumentsDirectory();
-        final file = File('${dir.path}/random_all_index.txt');
-        await file.writeAsString((_index + 1).toString());
-        if (_index < _queue.length - 1) {
-          setState(() => _index++);
-          _openExternally(_queue[_index].url);
-          _startTimer();
-        } else {
-          await file.writeAsString('0');
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('Tüm videolar tamamlandı')));
-          Navigator.pop(context);
-        }
+        await _nextCard();
       }
     });
+  }
+
+  Future<void> _nextCard() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/random_all_index.txt');
+    await file.writeAsString((_index + 1).toString());
+
+    if (_index < _queue.length - 1) {
+      setState(() => _index++);
+      _openExternally(_queue[_index].url);
+      _startTimer();
+    } else {
+      final end = DateTime.now();
+      await _repo.addUsageLogUtc(
+          startUtc: _startTime.toUtc(), endUtc: end.toUtc());
+      await file.writeAsString('0');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Tüm videolar tamamlandı')));
+      Navigator.pop(context);
+    }
+    await _updateUsage();
   }
 
   Future<void> _openExternally(String url) async {
@@ -485,20 +477,45 @@ class _RandomAllPageState extends State<RandomAllPage> {
 
   @override
   void dispose() {
+    final end = DateTime.now();
+    _repo.addUsageLogUtc(startUtc: _startTime.toUtc(), endUtc: end.toUtc());
     _timer?.cancel();
     super.dispose();
   }
 
+  String _fmtDur(Duration d) =>
+      '${d.inHours}:${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}';
+
   @override
   Widget build(BuildContext context) {
-    final total = _queue.length;
-    final done = min(_index + 1, total);
+    final totalCards = _queue.length;
+    final done = min(_index + 1, totalCards);
     return Scaffold(
-      appBar: AppBar(title: Text('Rastgele Tümünü Oynat ($done/$total)')),
-      body: Center(
-          child: Text(total == 0
-              ? 'Hiç video yok'
-              : 'Kalan süre: $_secondsLeft sn\nVideo $done / $total')),
+      appBar: AppBar(title: Text('Rastgele Tümünü Oynat ($done/$totalCards)')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('Kalan süre: $_secondsLeft sn', style: const TextStyle(fontSize: 22)),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Chip(label: Text('Bugün: ${_fmtDur(_today)}')),
+                const SizedBox(width: 8),
+                Chip(label: Text('Toplam: ${_fmtDur(_total)}')),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _nextCard,
+              icon: const Icon(Icons.skip_next),
+              label: const Text('Next'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
