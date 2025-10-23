@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'pages/home_page.dart';
-
+import 'time_tracker.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  TimeTracker.instance.start();
   runApp(const LeitnerApp());
 }
 

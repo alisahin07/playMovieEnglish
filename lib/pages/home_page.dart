@@ -4,14 +4,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-
+import '../time_tracker.dart';
 import '../fg_service.dart';
 import '../models.dart';
-import '../repository.dart' as repo; // ← alias eklendi
+import '../repository.dart' as repo;
 import 'settings_page.dart';
 import 'session_page.dart';
 import 'random_all_page.dart';
-import 'favorites_page.dart'; // favoriler sayfası
+import 'favorites_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -30,6 +30,8 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _repoFut = repo.Repository.create();
+    TimeTracker.instance.start();
+    startForegroundLeitnerLoop();
     _load();
   }
 
@@ -126,6 +128,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final s = _settings;
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Leitner Player'),
@@ -138,56 +142,104 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  ElevatedButton.icon(
-                      onPressed: _pickJsonAndImport,
-                      icon: const Icon(Icons.upload_file),
-                      label: const Text('JSON Yükle')),
-                  ElevatedButton.icon(
-                      onPressed: _exportProgress,
-                      icon: const Icon(Icons.ios_share),
-                      label: const Text('İlerlemeyi Dışa Aktar')),
-                  ElevatedButton.icon(
-                      onPressed: _openSettings,
-                      icon: const Icon(Icons.settings),
-                      label: const Text('Ayarlar')),
-                  OutlinedButton.icon(
-                      onPressed: _startSession,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Seansa Başla')),
-                  OutlinedButton.icon(
-                      onPressed: _startRandomAll,
-                      icon: const Icon(Icons.play_circle),
-                      label: const Text('Rastgele Tümünü Oynat')),
-                ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight,
+                ),
+                child: IntrinsicHeight(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          ElevatedButton.icon(
+                              onPressed: _pickJsonAndImport,
+                              icon: const Icon(Icons.upload_file),
+                              label: const Text('JSON Yükle')),
+                          ElevatedButton.icon(
+                              onPressed: _exportProgress,
+                              icon: const Icon(Icons.ios_share),
+                              label: const Text('İlerlemeyi Dışa Aktar')),
+                          ElevatedButton.icon(
+                              onPressed: _openSettings,
+                              icon: const Icon(Icons.settings),
+                              label: const Text('Ayarlar')),
+                          OutlinedButton.icon(
+                              onPressed: _startSession,
+                              icon: const Icon(Icons.play_arrow),
+                              label: const Text('Seansa Başla')),
+                          OutlinedButton.icon(
+                              onPressed: _startRandomAll,
+                              icon: const Icon(Icons.play_circle),
+                              label: const Text('Rastgele Tümünü Oynat')),
+                          const SizedBox(height: 8),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              minimumSize:
+                              Size(constraints.maxWidth * 0.9, 45),
+                            ),
+                            onPressed: () => TimeTracker.instance.start(),
+                            icon: const Icon(Icons.play_arrow),
+                            label: const Text('Zaman Sayacını Başlat'),
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              minimumSize:
+                              Size(constraints.maxWidth * 0.9, 45),
+                            ),
+                            onPressed: () {
+                              TimeTracker.instance.stop();
+                              stopForegroundLeitnerLoop();
+                            },
+                            icon: const Icon(Icons.stop_circle),
+                            label: const Text('Zaman Sayacını Durdur'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      if (s != null)
+                        Text(
+                          'Kutu aralıkları (dk): ${s.boxIntervalsMinutes.join(', ')} | Bekleme: ${s.dwellSeconds}s',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      const SizedBox(height: 8),
+                      Text('Toplam kart: ${_all.length}'),
+                      const Spacer(),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ValueListenableBuilder<Duration>(
+                            valueListenable: TimeTracker.instance.todayNotifier,
+                            builder: (_, d, __) => Chip(
+                                label:
+                                Text('Bugün: ${TimeTracker.fmt(d)}')),
+                          ),
+                          const SizedBox(width: 8),
+                          ValueListenableBuilder<Duration>(
+                            valueListenable: TimeTracker.instance.totalNotifier,
+                            builder: (_, d, __) => Chip(
+                                label:
+                                Text('Toplam: ${TimeTracker.fmt(d)}')),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 16),
-              if (s != null)
-                Text(
-                    'Kutu aralıkları (dk): ${s.boxIntervalsMinutes.join(', ')} | Bekleme: ${s.dwellSeconds}s'),
-              const SizedBox(height: 8),
-              Text('Toplam kart: ${_all.length}'),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Chip(label: Text('Bugün: ${_fmtDur(_today)}')),
-                  const SizedBox(width: 8),
-                  Chip(label: Text('Toplam: ${_fmtDur(_total)}')),
-                ],
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
   }
-
 }

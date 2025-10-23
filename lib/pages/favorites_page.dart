@@ -1,11 +1,12 @@
-// lib/pages/favorites_page.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models.dart';
 import '../repository.dart';
+import '../time_tracker.dart';
 
 class FavoritesPage extends StatefulWidget {
   const FavoritesPage({super.key});
@@ -22,6 +23,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
   Timer? _timer;
   late AppSettings _settings;
   bool _isFav = true;
+  bool _loading = true;
 
   @override
   void initState() {
@@ -32,21 +34,25 @@ class _FavoritesPageState extends State<FavoritesPage> {
   Future<void> _init() async {
     _repo = await Repository.create();
     _settings = await _repo.getSettings();
+    final prefs = await SharedPreferences.getInstance();
+    final lastIndex = prefs.getInt('last_fav_index') ?? 0;
     final favs = await _repo.getFavoriteCards();
+
     if (favs.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Favori link yok')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Favori yok')));
         Navigator.pop(context);
       }
       return;
     }
+
     _queue = favs;
+    if (lastIndex < _queue.length) _index = lastIndex;
+    _isFav = await _repo.isFavorite(_queue[_index].id);
     _openExternally(_queue[_index].url);
     _startTimer();
-    _isFav = await _repo.isFavorite(_queue[_index].id);
-    setState(() {});
+    setState(() => _loading = false);
   }
 
   void _startTimer() {
@@ -64,29 +70,25 @@ class _FavoritesPageState extends State<FavoritesPage> {
   }
 
   Future<void> _next() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('last_fav_index', _index);
+
     if (_index < _queue.length - 1) {
       setState(() => _index++);
       _openExternally(_queue[_index].url);
       _isFav = await _repo.isFavorite(_queue[_index].id);
       _startTimer();
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Favoriler tamamlandı')),
-        );
-        Navigator.pop(context);
-      }
+      prefs.remove('last_fav_index');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Favoriler tamamlandı')));
+      Navigator.pop(context);
     }
   }
 
   Future<void> _toggleFavorite() async {
     await _repo.toggleFavorite(_queue[_index].id, !_isFav);
-    _isFav = !_isFav;
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content:
-      Text(_isFav ? 'Favorilere eklendi' : 'Favorilerden çıkarıldı'),
-    ));
+    setState(() => _isFav = !_isFav);
   }
 
   Future<void> _openExternally(String url) async {
@@ -101,12 +103,16 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     final total = _queue.length;
-    final done = total > 0 ? (_index + 1).clamp(1, total) : 0;
+    final done = (_index + 1).clamp(1, total);
     final f = NumberFormat('00');
     final mm = f.format((_secondsLeft ~/ 60).clamp(0, 59));
     final ss = f.format((_secondsLeft % 60).clamp(0, 59));
-    final current = _queue.isEmpty ? null : _queue[_index];
+    final current = _queue[_index];
 
     return Scaffold(
       appBar: AppBar(
@@ -121,9 +127,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
           ),
         ],
       ),
-      body: current == null
-          ? const Center(child: CircularProgressIndicator())
-          : Center(
+      body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -137,6 +141,23 @@ class _FavoritesPageState extends State<FavoritesPage> {
               onPressed: _next,
               icon: const Icon(Icons.skip_next),
               label: const Text('Next'),
+            ),
+            const SizedBox(height: 40),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ValueListenableBuilder<Duration>(
+                  valueListenable: TimeTracker.instance.todayNotifier,
+                  builder: (_, d, __) =>
+                      Chip(label: Text('Bugün: ${TimeTracker.fmt(d)}')),
+                ),
+                const SizedBox(width: 8),
+                ValueListenableBuilder<Duration>(
+                  valueListenable: TimeTracker.instance.totalNotifier,
+                  builder: (_, d, __) =>
+                      Chip(label: Text('Toplam: ${TimeTracker.fmt(d)}')),
+                ),
+              ],
             ),
           ],
         ),
