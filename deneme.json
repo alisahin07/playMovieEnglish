@@ -1,0 +1,160 @@
+// 0) Bekleme fonksiyonu
+function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+// 1) İngilizce cümleyi (altyazıyı) güvenli şekilde okuyan fonksiyon
+async function getCurrentSentenceInfo(maxWaitMs = 4000) {
+  const step = 200;
+  const attempts = Math.floor(maxWaitMs / step);
+  let kara = null;
+
+  // .karaoke-page-content elemanını bekle
+  for (let i = 0; i < attempts; i++) {
+    kara = document.querySelector('.karaoke-page-content');
+    if (kara) break;
+    await sleep(step);
+  }
+
+  if (!kara) {
+    console.log("⛔ .karaoke-page-content bulunamadı (cümle alanı yok).");
+    return null;
+  }
+
+  // Altyazı metnini al
+  let text = (kara.innerText || kara.textContent || "").trim();
+
+  // Fazla boşlukları düzelt
+  text = text.replace(/\s+/g, " ").trim();
+
+  // Bazı durumlarda buton ikon yazıları vs. olabilir, son taraftaki 'content_copy' vb. temizle
+  text = text.replace(/content_copy$/i, "").trim();
+
+  // Kelimeleri say (en az bir harf içeren tokenları sayıyoruz)
+  const words = text
+    .split(" ")
+    .map(w => w.trim())
+    .filter(w => w && /[a-zA-Z]/.test(w));
+
+  const wordCount = words.length;
+
+  console.log(`📝 Cümle: "${text}" | Kelime sayısı: ${wordCount}`);
+
+  return { text, wordCount };
+}
+
+// 2) Dış “Download video” butonuna tıklama
+function clickOuter() {
+  const btn = document.querySelector('.download-current-video-button .overlay-video-info');
+  if (!btn) {
+    console.log("❌ Dış download butonu bulunamadı.");
+    return false;
+  }
+  btn.click();
+  console.log("➡ Popup açılıyor (Dış 'Download video' tıklandı)...");
+  return true;
+}
+
+// 3) Popup içi "Download Video" butonunu bulup tıkla (retry’li)
+async function clickInner(retry = 30) {
+  for (let i = 0; i < retry; i++) {
+    const btn = document.querySelector(
+      '.download-page-popup .download-video-content form.generate-video-form button[type="submit"]'
+    );
+
+    if (btn) {
+      btn.click();
+      console.log("⬇ Popup içindeki 'Download Video' butonuna BASILDI!");
+      return true;
+    }
+
+    // Popup biraz geç geliyor olabilir
+    await sleep(150);
+  }
+
+  console.log("❌ Popup içindeki 'Download Video' butonu bulunamadı.");
+  return false;
+}
+
+// 4) Sonraki videoya geç
+function nextVideo() {
+  const btn = Array.from(document.querySelectorAll('.control-button img'))
+    .find(i => i.src.includes("forward"));
+  if (!btn) {
+    console.log("❌ Sonraki (forward) butonu bulunamadı.");
+    return false;
+  }
+  btn.click();
+  console.log("➡ Sonraki videoya geçildi.");
+  return true;
+}
+
+// 5) Tek bir videoyu indirme akışı (senin çalışan kodun)
+async function downloadOneVideo() {
+  if (!clickOuter()) {
+    console.log("❌ Dış download butonu yok, bu video indirilemiyor.");
+    return false;
+  }
+
+  // Popup'ın görünmesi için küçük bekleme
+  await sleep(600);
+
+  const ok = await clickInner(); // retry ile iç butona bas
+  if (!ok) return false;
+
+  // Tarayıcının indirmeyi başlatması için bekleyelim
+  await sleep(2500);
+
+  return true;
+}
+
+// 6) FİLTRELİ: 3–5 kelimelik cümlelere sahip videoları indir
+async function autoDownloadVideosFiltered(maxDownload = 3, maxLoops = 50) {
+  console.log(`\n🎯 Filtre: 3–5 kelimelik cümleler indirilecek. Hedef indirme sayısı: ${maxDownload}\n`);
+
+  let downloaded = 0;
+
+  for (let i = 0; i < maxLoops; i++) {
+    console.log(`\n===== 🔁 Döngü ${i + 1}/${maxLoops} | Şu ana kadar indirilen: ${downloaded} =====`);
+
+    // Önce mevcut videonun cümlesini oku
+    const info = await getCurrentSentenceInfo();
+    if (!info) {
+      console.log("❌ Cümle okunamadı, sadece sonraki videoya geçiliyor.");
+    } else {
+      const { text, wordCount } = info;
+
+      if (wordCount >= 3 && wordCount <= 8) {
+        console.log("✅ Kelime sayısı 3–5 arasında, bu video indirilecek...");
+        const ok = await downloadOneVideo();
+        if (!ok) {
+          console.log("❌ İndirme başarısız oldu, döngü durduruluyor.");
+          break;
+        }
+        downloaded++;
+
+        if (downloaded >= maxDownload) {
+          console.log(`🎉 Hedeflenen ${maxDownload} video indirildi. İşlem bitiyor.`);
+          break;
+        }
+      } else {
+        console.log("⏭ Kelime sayısı 3–5 değil, bu videoyu atlıyoruz (indirme yok).");
+      }
+    }
+
+    // Sonraki videoya geç
+    const moved = nextVideo();
+    if (!moved) {
+      console.log("❌ Sonraki videoya geçilemedi, döngü durduruluyor.");
+      break;
+    }
+
+    // Yeni videonun yüklenmesi + altyazının gelmesi için bekleme
+    await sleep(1800);
+  }
+
+  console.log(`\n✅ Filtreli indirme tamamlandı. Toplam indirilen video: ${downloaded}`);
+}
+
+// 7) ÇALIŞTIR: Örneğin 3 tane uygun video indir
+autoDownloadVideosFiltered(30, 180);

@@ -25,6 +25,8 @@ class _RandomAllPageState extends State<RandomAllPage> {
   Timer? _timer;
   late AppSettings _settings;
   bool _loading = true;
+  bool _isFav = false;
+  bool _isShuffled = false; // 🔹 Rastgele sıralama durumu
 
   @override
   void initState() {
@@ -49,12 +51,28 @@ class _RandomAllPageState extends State<RandomAllPage> {
       return;
     }
 
-    _queue = List.of(all)..shuffle(Random());
+    _queue = List.of(all);
+    if (_isShuffled) {
+      _queue.shuffle(Random());
+    }
+
     if (lastIndex < _queue.length) _index = lastIndex;
 
+    _isFav = await _repo.isFavorite(_queue[_index].id);
     _openExternally(_queue[_index].url);
     _startTimer();
     setState(() => _loading = false);
+  }
+
+  void _shuffleList() {
+    setState(() {
+      _queue.shuffle(Random());
+      _index = 0;
+      _isShuffled = true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kartlar rastgele sıralandı')),
+      );
+    });
   }
 
   void _startTimer() {
@@ -78,6 +96,7 @@ class _RandomAllPageState extends State<RandomAllPage> {
     if (_index < _queue.length - 1) {
       setState(() => _index++);
       _openExternally(_queue[_index].url);
+      _isFav = await _repo.isFavorite(_queue[_index].id);
       _startTimer();
     } else {
       prefs.remove('last_random_index');
@@ -85,6 +104,15 @@ class _RandomAllPageState extends State<RandomAllPage> {
           .showSnackBar(const SnackBar(content: Text('Tüm videolar tamamlandı')));
       Navigator.pop(context);
     }
+  }
+
+  Future<void> _toggleFavorite() async {
+    final current = _queue[_index];
+    await _repo.toggleFavorite(current.id, !_isFav);
+    setState(() => _isFav = !_isFav);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(_isFav ? 'Favorilere eklendi' : 'Favorilerden çıkarıldı'),
+    ));
   }
 
   Future<void> _openExternally(String url) async {
@@ -100,42 +128,74 @@ class _RandomAllPageState extends State<RandomAllPage> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
     final total = _queue.length;
     final done = min(_index + 1, total);
     final f = NumberFormat('00');
     final mm = f.format((_secondsLeft ~/ 60).clamp(0, 59));
     final ss = f.format((_secondsLeft % 60).clamp(0, 59));
+    final current = _queue.isNotEmpty ? _queue[_index] : null;
 
     return Scaffold(
-      appBar: AppBar(title: Text('Rastgele Tümünü Oynat ($done/$total)')),
-      body: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text('Kalan: $mm:$ss', style: const TextStyle(fontSize: 22)),
-          const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: _next,
-            icon: const Icon(Icons.skip_next),
-            label: const Text('Next'),
-          ),
-          const SizedBox(height: 40),
-          Row(
+      appBar: AppBar(
+        title: Text('Rastgele Tümünü Oynat ($done/$total)'),
+        actions: [
+          if (current != null)
+            IconButton(
+              icon: Icon(
+                _isFav ? Icons.favorite : Icons.favorite_border,
+                color: _isFav ? Colors.red : null,
+              ),
+              onPressed: _toggleFavorite,
+            ),
+        ],
+      ),
+      body: SafeArea(
+        child: Center(
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              ValueListenableBuilder<Duration>(
-                valueListenable: TimeTracker.instance.todayNotifier,
-                builder: (_, d, __) =>
-                    Chip(label: Text('Bugün: ${TimeTracker.fmt(d)}')),
+              if (current != null)
+                Text(
+                  current.title ?? current.url,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              const SizedBox(height: 8),
+              Text('Kalan: $mm:$ss', style: const TextStyle(fontSize: 22)),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: _next,
+                icon: const Icon(Icons.skip_next),
+                label: const Text('Next'),
               ),
-              const SizedBox(width: 8),
-              ValueListenableBuilder<Duration>(
-                valueListenable: TimeTracker.instance.totalNotifier,
-                builder: (_, d, __) =>
-                    Chip(label: Text('Toplam: ${TimeTracker.fmt(d)}')),
+              const SizedBox(height: 16),
+              // 🔹 Yeni buton: Rastgele sırala
+              ElevatedButton.icon(
+                onPressed: _shuffleList,
+                icon: const Icon(Icons.shuffle),
+                label: const Text('Rastgele Sırala'),
+              ),
+              const SizedBox(height: 40),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ValueListenableBuilder<Duration>(
+                    valueListenable: TimeTracker.instance.todayNotifier,
+                    builder: (_, d, __) =>
+                        Chip(label: Text('Bugün: ${TimeTracker.fmt(d)}')),
+                  ),
+                  const SizedBox(width: 8),
+                  ValueListenableBuilder<Duration>(
+                    valueListenable: TimeTracker.instance.totalNotifier,
+                    builder: (_, d, __) =>
+                        Chip(label: Text('Toplam: ${TimeTracker.fmt(d)}')),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
